@@ -59,10 +59,11 @@ def face_swap(img1, img2):
     landmarks1 = get_landmarks(img1)
     landmarks2 = get_landmarks(img2)
 
+    # Convex hull
     hull1 = cv2.convexHull(landmarks1)
     hull2 = cv2.convexHull(landmarks2)
 
-    # Delaunay triangulation on target face
+    # Find Delaunay triangulation on target face
     rect = (0, 0, img2.shape[1], img2.shape[0])
     subdiv = cv2.Subdiv2D(rect)
     for p in hull2.reshape(-1, 2):
@@ -70,26 +71,29 @@ def face_swap(img1, img2):
     triangles = subdiv.getTriangleList()
     triangles = np.array(triangles, dtype=np.int32)
 
-    # Map each triangle
+    # Warp each triangle from source to destination
+    img1_warped = np.copy(img2)  # start from target image
     for t in triangles:
         pts2 = []
         pts1 = []
         for i in range(0, 6, 2):
             pt2 = (t[i], t[i+1])
-            # Find nearest landmark instead of exact match
+            # find nearest landmark index
             idx = find_closest_landmark(landmarks2, np.array(pt2))
             pts2.append(landmarks2[idx])
             pts1.append(landmarks1[idx])
         if len(pts1) == 3 and len(pts2) == 3:
-            warp_triangle(img1, img2, pts1, pts2)
+            warp_triangle(img1, img1_warped, pts1, pts2)
 
-    # Seamless clone
+    # Create mask for destination face
     mask = np.zeros(img2.shape[:2], dtype=np.uint8)
     cv2.fillConvexPoly(mask, np.int32(hull2), 255)
+
+    # Clone warped face into target
     r = cv2.boundingRect(np.int32(hull2))
     center = (r[0] + int(r[2]/2), r[1] + int(r[3]/2))
+    output = cv2.seamlessClone(img1_warped, img2, mask, center, cv2.NORMAL_CLONE)
 
-    output = cv2.seamlessClone(img2, img2, mask, center, cv2.NORMAL_CLONE)
     return output
 
 
