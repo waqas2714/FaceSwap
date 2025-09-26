@@ -9,7 +9,11 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+        "infoPlist": {
+          "NSCameraUsageDescription": "This app uses the camera to let you take photos like Snapchat",
+          "NSMicrophoneUsageDescription": "This app uses the microphone to record videos with audio"
+        }
     },
     "android": {
       "adaptiveIcon": {
@@ -19,7 +23,13 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO", 
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
     },
     "web": {
       "output": "static",
@@ -37,6 +47,20 @@
           "dark": {
             "backgroundColor": "#000000"
           }
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "FaceSwap accesses your photos to help you select."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow FaceSwap to access your camera",
+          "microphonePermission": "Allow FaceSwap to access your microphone",
+          "recordAudioAndroid": true
         }
       ]
     ],
