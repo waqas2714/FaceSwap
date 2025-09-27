@@ -4,6 +4,8 @@ import numpy as np
 from fastapi import FastAPI, File, UploadFile
 from fastapi.responses import StreamingResponse
 from io import BytesIO
+import base64
+from fastapi.responses import JSONResponse
 
 app = FastAPI()
 
@@ -117,5 +119,11 @@ async def swap_faces(file1: UploadFile = File(...), file2: UploadFile = File(...
     except Exception as e:
         return {"error": str(e)}
 
+    # Encode image as JPEG
     _, buffer = cv2.imencode(".jpg", swapped)
-    return StreamingResponse(BytesIO(buffer.tobytes()), media_type="image/jpeg")
+
+    # Convert to base64 string
+    img_base64 = base64.b64encode(buffer).decode("utf-8")
+
+    # Return as JSON
+    return JSONResponse(content={"image": img_base64})
