@@ -2,10 +2,8 @@ import cv2
 import dlib
 import numpy as np
 from fastapi import FastAPI, File, UploadFile
-from fastapi.responses import StreamingResponse
-from io import BytesIO
-import base64
 from fastapi.responses import JSONResponse
+import base64
 
 app = FastAPI()
 
@@ -23,81 +21,88 @@ def get_landmarks(img):
 
 
 def warp_triangle(img1, img2, t1, t2):
-    # Bounding boxes
     r1 = cv2.boundingRect(np.float32([t1]))
     r2 = cv2.boundingRect(np.float32([t2]))
 
-    # Offset points by bounding box
-    t1_rect = []
-    t2_rect = []
+    t1_rect, t2_rect = [], []
     for i in range(3):
-        t1_rect.append(((t1[i][0] - r1[0]), (t1[i][1] - r1[1])))
-        t2_rect.append(((t2[i][0] - r2[0]), (t2[i][1] - r2[1])))
+        t1_rect.append((t1[i][0] - r1[0], t1[i][1] - r1[1]))
+        t2_rect.append((t2[i][0] - r2[0], t2[i][1] - r2[1]))
 
-    # Mask for triangle
     mask = np.zeros((r2[3], r2[2], 3), dtype=np.float32)
     cv2.fillConvexPoly(mask, np.int32(t2_rect), (1.0, 1.0, 1.0))
 
-    # Extract patch
     img1_rect = img1[r1[1]:r1[1]+r1[3], r1[0]:r1[0]+r1[2]]
 
-    # Affine transform
     M = cv2.getAffineTransform(np.float32(t1_rect), np.float32(t2_rect))
     warped = cv2.warpAffine(img1_rect, M, (r2[2], r2[3]), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT_101)
 
-    # Blend into destination
     img2_rect = img2[r2[1]:r2[1]+r2[3], r2[0]:r2[0]+r2[2]]
     img2_rect = img2_rect * (1 - mask) + warped * mask
     img2[r2[1]:r2[1]+r2[3], r2[0]:r2[0]+r2[2]] = img2_rect
 
 
 def find_closest_landmark(landmarks, point):
-    """Find index of the closest landmark to a given point."""
     distances = np.linalg.norm(landmarks - point, axis=1)
     return np.argmin(distances)
 
+
+def align_face(img1, landmarks1, landmarks2, target_shape):
+    # Use full affine instead of partial (handles tilt better)
+    M, _ = cv2.estimateAffine2D(landmarks1, landmarks2, method=cv2.LMEDS)
+    aligned_img = cv2.warpAffine(img1, M, (target_shape[1], target_shape[0]))
+    aligned_landmarks = cv2.transform(np.expand_dims(landmarks1, axis=0), M)[0]
+    return aligned_img, aligned_landmarks
 
 def face_swap(img1, img2):
     landmarks1 = get_landmarks(img1)
     landmarks2 = get_landmarks(img2)
 
     # Convex hull
-    hull1 = cv2.convexHull(landmarks1)
-    hull2 = cv2.convexHull(landmarks2)
+    hull_indices = cv2.convexHull(landmarks2, returnPoints=False)
+    hull1 = [landmarks1[i[0]] for i in hull_indices]
+    hull2 = [landmarks2[i[0]] for i in hull_indices]
 
-    # Find Delaunay triangulation on target face
+    # Calculate Delaunay triangulation for target face
     rect = (0, 0, img2.shape[1], img2.shape[0])
     subdiv = cv2.Subdiv2D(rect)
-    for p in hull2.reshape(-1, 2):
+    for p in hull2:
         subdiv.insert((int(p[0]), int(p[1])))
     triangles = subdiv.getTriangleList()
     triangles = np.array(triangles, dtype=np.int32)
 
-    # Warp each triangle from source to destination
-    img1_warped = np.copy(img2)  # start from target image
-    for t in triangles:
-        pts2 = []
-        pts1 = []
-        for i in range(0, 6, 2):
-            pt2 = (t[i], t[i+1])
-            # find nearest landmark index
-            idx = find_closest_landmark(landmarks2, np.array(pt2))
-            pts2.append(landmarks2[idx])
-            pts1.append(landmarks1[idx])
-        if len(pts1) == 3 and len(pts2) == 3:
-            warp_triangle(img1, img1_warped, pts1, pts2)
+    # Find corresponding landmark indices for triangles
+    def index_of_point(pt, landmarks):
+        for i, l in enumerate(landmarks):
+            if abs(pt[0] - l[0]) < 2 and abs(pt[1] - l[1]) < 2:
+                return i
+        return -1
 
-    # Create mask for destination face
+    hull_indices = []
+    for t in triangles:
+        pts = [(t[0], t[1]), (t[2], t[3]), (t[4], t[5])]
+        idxs = []
+        for pt in pts:
+            idx = find_closest_landmark(landmarks2, np.array(pt))
+            idxs.append(idx)
+        hull_indices.append(idxs)
+
+    # Warp triangles
+    img1_warped = np.copy(img2)
+    for idxs in hull_indices:
+        t1 = [landmarks1[i] for i in idxs]
+        t2 = [landmarks2[i] for i in idxs]
+        warp_triangle(img1, img1_warped, t1, t2)
+
+    # Mask for blending
     mask = np.zeros(img2.shape[:2], dtype=np.uint8)
     cv2.fillConvexPoly(mask, np.int32(hull2), 255)
 
-    # Clone warped face into target
     r = cv2.boundingRect(np.int32(hull2))
-    center = (r[0] + int(r[2]/2), r[1] + int(r[3]/2))
+    center = (r[0] + r[2]//2, r[1] + r[3]//2)
     output = cv2.seamlessClone(img1_warped, img2, mask, center, cv2.NORMAL_CLONE)
 
     return output
-
 
 @app.post("/hello")
 async def hello():
@@ -119,11 +124,7 @@ async def swap_faces(file1: UploadFile = File(...), file2: UploadFile = File(...
     except Exception as e:
         return {"error": str(e)}
 
-    # Encode image as JPEG
     _, buffer = cv2.imencode(".jpg", swapped)
-
-    # Convert to base64 string
     img_base64 = base64.b64encode(buffer).decode("utf-8")
 
-    # Return as JSON
     return JSONResponse(content={"image": img_base64})
